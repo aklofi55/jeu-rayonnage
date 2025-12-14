@@ -40,8 +40,8 @@ Copier le code
 node server.js
 Ouvrir un navigateur et aller à l'adresse
 
-arduino
-Copier le code
-http://localhost:8889
+Le code source complet est disponible sur le dépôt GitHub :  https://github.com/aklofi55/jeu-rayonnage
+
+
 Entrer un nom pour rejoindre la partie et commencer à jouer
 
