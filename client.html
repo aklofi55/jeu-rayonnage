@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Jeu - Rayonnage</title>
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  body { font-family: Arial, sans-serif; margin: 14px; }
+  #ui { display:flex; gap:24px; }
+  #left { width: 390px; }
+  #board { flex:2; border: 2px solid #ccc; padding:12px; }
+  #liste li { margin:6px 0; }
+  .book { stroke: #222; stroke-width:1px; cursor:pointer; }
+  #conveyor div { cursor:pointer; padding:4px; margin-right:6px; border:2px solid #aaa; display:inline-block; width:150px; }
+  #conveyor div.selected { background:#ffd; }
+  #chat { height:160px; overflow:auto; border:1px solid #ddd; padding:8px; background:#fafafa; }
+  button { margin-top:6px; }
+  .turn { font-weight:700; color:green; }
+</style>
+</head>
+<body>
+<h2>Jeu Rayon</h2>
+<div id="ui">
+  <div id="left">
+    <input id="nom" placeholder="Votre nom">
+    <button id="enterBtn">Entrer</button>
+    <button id="leaveBtn">Sortir</button>
+    <h3>Joueurs</h3>
+    <ul id="liste"></ul>
+    <h4>Tour now: <span id="turnInfo">—</span></h4>
+
+    <h3>Chats les gars </h3>
+    <div id="chat"></div>
+    <input id="msg" placeholder="Message"><button id="sendMsg">Envoyer</button>
+  </div>
+
+  <div id="board">
+    <h3>Rayons</h3>
+    <div id="svgContainer"></div>
+    <h4>Tapis roulant (à gauche -> livre disponible)</h4>
+    <div id="conveyor"></div>
+    <p><small>Cliquer sur un livre (si c'est à vous de jouer).</small></p>
+  </div>
+</div>
+
+<script>
+const socket = io();
+let myPlayer = null;
+let selectedBook = null;
+
+const shelvesCount = 3;
+const shelfSize = 8;
+
+const enterBtn = document.getElementById('enterBtn');
+const leaveBtn = document.getElementById('leaveBtn');
+const nomInput = document.getElementById('nom');
+const liste = document.getElementById('liste');
+const chatDiv = document.getElementById('chat');
+const msgInput = document.getElementById('msg');
+const sendMsg = document.getElementById('sendMsg');
+const turnInfo = document.getElementById('turnInfo');
+const conveyorDiv = document.getElementById('conveyor');
+
+const width = 800, height = 300;
+const svg = d3.select('#svgContainer')
+  .append('svg')
+  .attr('width', width)
+  .attr('height', height);
+
+const shelfYSpacing = 80;
+const shelfX = 150;
+const slotW = 60, slotH = 30, slotGap = 8;
+
+for(let s=0;s<shelvesCount;s++){
+  const y = 20 + s * shelfYSpacing;
+  svg.append('line').attr('x1', shelfX-10).attr('y1', y+slotH).attr('x2', shelfX + (slotW+slotGap)*shelfSize).attr('y2', y+slotH).attr('stroke','#444');
+  for(let i=0;i<shelfSize;i++){
+    svg.append('rect')
+      .attr('x', shelfX + i*(slotW+slotGap))
+      .attr('y', y)
+      .attr('width', slotW)
+      .attr('height', slotH)
+      .attr('fill', '#fff')
+      .attr('stroke', '#bbb')
+      .attr('data-shelf', s)
+      .attr('data-pos', i)
+      .on('click', function(){
+        const sIdx = +this.getAttribute('data-shelf');
+        const pIdx = +this.getAttribute('data-pos');
+        onSlotClick(sIdx, pIdx);
+      });
+  }
+}
+
+function renderConveyor(conveyor){
+  conveyorDiv.innerHTML = '';
+  conveyor.forEach((b, idx) => {
+    const bDiv = document.createElement('div');
+    bDiv.textContent = b.titre + ' — ' + b.auteur;
+    bDiv.title = JSON.stringify(b);
+    bDiv.onclick = () => {
+      if(idx !== 0){
+        alert('Seul le premier livre du tapis peut être placé maintenant.');
+        return;
+      }
+      selectedBook = b;
+      Array.from(conveyorDiv.children).forEach(ch => ch.classList.remove('selected'));
+      bDiv.classList.add('selected');
+    };
+    conveyorDiv.appendChild(bDiv);
+  });
+}
+
+function renderShelves(shelves){
+  svg.selectAll('.book').remove();
+  for(let s=0;s<shelves.length;s++){
+    const y = 20 + s*shelfYSpacing;
+    for(let i=0;i<shelves[s].length;i++){
+      const b = shelves[s][i];
+      if(b){
+        svg.append('rect')
+          .attr('class','book')
+          .attr('x', shelfX + i*(slotW+slotGap))
+          .attr('y', y)
+          .attr('width', slotW)
+          .attr('height', slotH)
+          .attr('fill', '#cde');
+        svg.append('text')
+          .attr('x', shelfX + i*(slotW+slotGap) + 4)
+          .attr('y', y + slotH/2 + 4)
+          .attr('font-size', 10)
+          .text(b.titre.length>10 ? b.titre.slice(0,10)+'…' : b.titre);
+      }
+    }
+  }
+}
+
+function onSlotClick(shelfIdx, posIdx){
+  if(!myPlayer){
+    alert("Entrez dans la partie d'abord");
+    return;
+  }
+  if(!selectedBook){
+    alert("Sélectionne premier du tapis");
+    return;
+  }
+  socket.emit('placerLivre', { shelfIdx, posIdx });
+  selectedBook = null;
+  Array.from(conveyorDiv.children).forEach(ch => ch.classList.remove('selected'));
+}
+
+socket.on('entreeOK', (joueur) => {
+  myPlayer = joueur;
+  addChat(`Tu es ${joueur.nom} (#${joueur.numero})`);
+  socket.emit('getState');
+});
+socket.on('refusEntree', (msg) => alert(msg));
+socket.on('maJoueurs', (list) => {
+  liste.innerHTML = '';
+  list.forEach(p => {
+    const li = document.createElement('li');
+    li.textContent = `${p.numero} - ${p.nom} — ${p.score || 0} pts`;
+    liste.appendChild(li);
+  });
+});
+socket.on('message', (txt) => addChat(txt));
+socket.on('errorMsg', (txt) => alert(txt));
+
+socket.on('state', (st) => {
+  const { joueurs, conveyor, shelves, currentTurn } = st;
+  renderConveyor(conveyor || []);
+  renderShelves(shelves || []);
+  liste.innerHTML = '';
+  if(joueurs) joueurs.forEach((p, idx) => {
+    const li = document.createElement('li');
+    li.textContent = `${p.numero} - ${p.nom} — ${p.score || 0} pts`;
+    if(idx === currentTurn) li.style.fontWeight = '700';
+    liste.appendChild(li);
+  });
+  turnInfo.textContent = joueurs && joueurs[currentTurn] ? `${joueurs[currentTurn].nom} (#${joueurs[currentTurn].numero})` : '—';
+});
+
+function addChat(txt){
+  chatDiv.innerHTML += txt + '<br>';
+  chatDiv.scrollTop = chatDiv.scrollHeight;
+}
+
+enterBtn.onclick = () => {
+  const n = nomInput.value.trim();
+  if(!n) return alert('Mettre un nom');
+  socket.emit('entrerPartie', n);
+};
+leaveBtn.onclick = () => {
+  socket.emit('sortiePartie');
+  myPlayer = null;
+};
+sendMsg.onclick = () => {
+  const m = msgInput.value.trim();
+  if(!m) return;
+  socket.emit('message', m);
+  msgInput.value = '';
+};
+
+socket.emit('getState');
+</script>
+</body>
+</html>
